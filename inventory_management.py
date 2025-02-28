@@ -60,20 +60,20 @@ def prepare_sales_orders(sales_orders_df, inventory_df, sales_order_key='Index')
             'Production QTY': row['Open Sales QTY'],
             'Inventory Used': 0.0,
             'Starting Inventory': inventory_df.at[row[sales_order_key], 'Available']
-                if row[sales_order_key] in inventory_df.index else np.nan
+                if row[sales_order_key] in inventory_df.index else 0.0  # Updated from np.nan to 0.0
         }), axis=1)
     return sales_orders_df
 
-def compute_levels(bom_df, root_items):
-    """Compute BOM levels for items starting from root items."""
-    levels = {item: 0 for item in root_items}
+def compute_levels(bom_df, root_items, valid_items):
+    """Compute BOM levels for items starting from root items, only including valid items."""
+    levels = {item: 0 for item in root_items if item in valid_items}
     changed = True
     while changed:
         changed = False
         for _, row in bom_df.iterrows():
             parent = row['Parent Index']
             child = row['Child Index']
-            if pd.notnull(parent) and parent in levels:
+            if pd.notnull(parent) and parent in levels and child in valid_items:
                 new_level = levels[parent] + 1
                 if child not in levels or new_level > levels[child]:
                     levels[child] = new_level
@@ -107,13 +107,16 @@ def process_transactions(fully_blow_out_df, data):
     item_table_df = data["final_item_data"]
     purchases_df = data["purchases"]
 
+    # Define valid items from item_table_df
+    valid_items = set(item_table_df['Index'])
+
     # Clean lead times
     item_table_df['Lead Time (Days)'] = item_table_df['Lead Time (Days)'].apply(clean_lead_time)
 
-    # Determine sales order key
+    # Determine sales order key and filter root items to valid items only
     sales_order_key = 'Index' if 'Index' in sales_orders_df.columns else 'Item Index'
-    root_items = sales_orders_df[sales_order_key].unique()
-    levels = compute_levels(fully_blow_out_df, root_items)
+    root_items = [item for item in sales_orders_df[sales_order_key].unique() if item in valid_items]
+    levels = compute_levels(fully_blow_out_df, root_items, valid_items)
     for item in root_items:
         if item not in levels:
             levels[item] = 0
@@ -141,11 +144,13 @@ def process_transactions(fully_blow_out_df, data):
     initial_inventory = inventory_df['Available'].to_dict()
     sales_orders_df = prepare_sales_orders(sales_orders_df, inventory_df, sales_order_key)
 
-    # Aggregate gross requirements and scheduled receipts with float64 type
+    # Aggregate gross requirements, skipping invalid items
     gross_requirements = {}
-    scheduled_receipts = {}
     for _, row in sales_orders_df.iterrows():
         item_index = row[sales_order_key]
+        if item_index not in valid_items:
+            print(f"Warning: Sales order item {item_index} not in valid_items. Skipping.")
+            continue
         qty = row['Open Sales QTY']
         req_date = pd.to_datetime(row['Date']).normalize()
         if req_date in date_range:
@@ -155,8 +160,13 @@ def process_transactions(fully_blow_out_df, data):
         else:
             print(f"Warning: Sales order date {req_date} for item {item_index} outside planning horizon, skipped.")
 
+    # Aggregate scheduled receipts, skipping invalid items
+    scheduled_receipts = {}
     for _, row in purchases_df.iterrows():
         item_index = row['Index']
+        if item_index not in valid_items:
+            print(f"Warning: Purchase item {item_index} not in valid_items. Skipping.")
+            continue
         qty = row['QTY']
         receipt_date = pd.to_datetime(row['Expected Receipt Date']).normalize()
         if receipt_date in date_range:
@@ -166,21 +176,28 @@ def process_transactions(fully_blow_out_df, data):
         else:
             print(f"Warning: Receipt date {receipt_date} for item {item_index} outside planning horizon, skipped.")
 
-    # Calculate MRP plans by level
+    # Calculate MRP plans by level, processing only valid items
     mrp_plans = {}
     for level in range(max_level + 1):
         items_at_level = [item for item, lvl in levels.items() if lvl == level]
         for item in items_at_level:
+            if item not in valid_items:
+                print(f"Warning: Item {item} not in valid_items. Skipping.")
+                continue
+            print(f"Processing item: {item}")
             lead_time = item_table_df[item_table_df['Index'] == item]['Lead Time (Days)'].iloc[0]
             init_inv = initial_inventory.get(item, 0.0)
             gross_req_series = gross_requirements.get(item, pd.Series(0.0, index=date_range, dtype='float64'))
             sched_receipts_series = scheduled_receipts.get(item, pd.Series(0.0, index=date_range, dtype='float64'))
             mrp_plan = calculate_mrp_plan(item, gross_req_series, sched_receipts_series, init_inv, lead_time, date_range)
             mrp_plans[item] = mrp_plan
-            # Explode requirements to child items
+            # Explode requirements to child items, skipping invalid children
             for _, row in fully_blow_out_df.iterrows():
                 if row['Parent Index'] == item:
                     child = row['Child Index']
+                    if child not in valid_items:
+                        print(f"Warning: Child item {child} not in valid_items. Skipping.")
+                        continue
                     qty_per = row['QTY Per']
                     for release_date, release_qty in mrp_plan['Planned Order Releases'][mrp_plan['Planned Order Releases'] > 0].items():
                         if release_date >= date_range[0]:

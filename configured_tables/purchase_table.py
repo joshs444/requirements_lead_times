@@ -1,6 +1,8 @@
 import pandas as pd
 from raw_data.purchase_data import get_purchase_data
 from configured_tables.item_table import final_item_table  # Cached final item table
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 def load_configured_purchase_data():
     """
@@ -8,24 +10,36 @@ def load_configured_purchase_data():
 
     Steps:
       1. Load the raw purchase data.
-      2. Filter rows to include only:
+      2. Convert "Expected Receipt Date" to datetime.
+      3. Filter rows to include only:
            - Status == 'OPEN'
            - Type == 2
            - Document Type == 1
-      3. Rename 'Outstanding Quantity' to 'QTY'.
-      4. Keep only columns: No_, Expected Receipt Date, Document No_, QTY.
-      5. Remove rows with QTY equal to 0.
-      6. Merge on No_ with final_item_table to get the Index.
-      7. Return a DataFrame with columns: Index, No_, Expected Receipt Date, Document No_, QTY.
+           - Expected Receipt Date > today + 3 months and < today + 1 year
+      4. Rename 'Outstanding Quantity' to 'QTY'.
+      5. Keep only columns: No_, Expected Receipt Date, Document No_, QTY.
+      6. Remove rows with QTY equal to 0.
+      7. Merge on No_ with final_item_table to get the Index.
+      8. Return a DataFrame with columns: Index, No_, Expected Receipt Date, Document No_, QTY.
     """
     # Load raw purchase data
     purchase_df = get_purchase_data().copy()
 
-    # Filter for the specified conditions
+    # Define today and the date thresholds
+    today = datetime.today().date()
+    three_months_later = today + relativedelta(months=3)
+    one_year_later = today + relativedelta(years=1)
+
+    # Convert "Expected Receipt Date" to datetime
+    purchase_df["Expected Receipt Date"] = pd.to_datetime(purchase_df["Expected Receipt Date"])
+
+    # Filter for the specified conditions, including the new date range filter
     purchase_filtered = purchase_df[
         (purchase_df["Status"] == "OPEN") &
         (purchase_df["Type"] == 2) &
-        (purchase_df["Document Type"] == 1)
+        (purchase_df["Document Type"] == 1) &
+        (purchase_df["Expected Receipt Date"].dt.date > three_months_later) &
+        (purchase_df["Expected Receipt Date"].dt.date < one_year_later)
     ]
 
     # Rename 'Outstanding Quantity' to 'QTY'

@@ -18,8 +18,8 @@ def load_configured_bom_table():
     bom_df = get_bom_data().copy()
 
     # Create mapping dictionaries from the cached final item table
-    # Ensure the Index values are integers
-    item_index_map = final_item_table.set_index("No_")["Index"].astype(int).to_dict()
+    # Convert 'Index' to integer to ensure type consistency
+    item_index_map = final_item_table.set_index("No_")["Index"].apply(pd.to_numeric, errors="coerce").fillna(0).astype(int).to_dict()
     item_po_map = final_item_table.set_index("No_")["Purchase/Output"].to_dict()
 
     # Filter BOM rows: only keep rows where the Production BOM item's Purchase/Output is "Output"
@@ -30,7 +30,7 @@ def load_configured_bom_table():
     bom_df["Parent Index"] = bom_df["Production BOM No_"].map(item_index_map)
     bom_df["Child Index"] = bom_df["Component No_"].map(item_index_map)
 
-    # Fill any missing values and convert to int
+    # Ensure indices are integers, replacing any missing values with 0
     bom_df["Parent Index"] = bom_df["Parent Index"].fillna(0).astype(int)
     bom_df["Child Index"] = bom_df["Child Index"].fillna(0).astype(int)
 

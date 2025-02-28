@@ -45,6 +45,7 @@ WHERE
     [Type] = 2
     AND [Outstanding Quantity] > 0
     AND [Planned Delivery Date] > DATEADD(MONTH, -6, GETDATE())
+    AND [Document No_] IN ('S107738', 'S111036A')
 GROUP BY
     [No_],
     [Sell-to Customer Name],
